@@ -1,0 +1,1320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IBDLabel — IBD frame annotator</title>
+<style>
+  :root{
+    /* Neutral clinical graphite chrome so the warm mucosa images set the only color in view.
+       Endoscopy color judgement (erythema) is biased by surrounding hue — keep the UI desaturated. */
+    --bg:#15181d;
+    --panel:#1d2127;
+    --panel-2:#232831;
+    --line:#2d3440;
+    --line-soft:#262c35;
+    --ink:#e9ecf1;
+    --ink-dim:#9aa3b0;
+    --ink-faint:#6b7480;
+    --accent:#c43f9c;     /* instrument cyan — distinct from any mucosa red */
+    --accent-dim:#882a74;
+    /* severity ramp — encodes real grade, not decoration */
+    --s0:#5cb87a;
+    --s1:#e0b341;
+    --s2:#e08b41;
+    --s3:#d65151;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --ui:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg);color:var(--ink);font-family:var(--ui);
+    font-size:14px;line-height:1.45;overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit}
+  ::selection{background:var(--accent-dim);color:#fff}
+
+  .app{display:grid;grid-template-rows:auto 1fr;height:100vh}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    display:flex;align-items:center;gap:14px;padding:10px 16px;
+    border-bottom:1px solid var(--line);background:linear-gradient(180deg,#1e232b,#191d23);
+  }
+  .brand{display:flex;align-items:baseline;gap:9px;margin-right:6px}
+  .brand .mark{font-family:var(--mono);font-weight:700;letter-spacing:.5px;color:var(--accent)}
+  .brand .mark b{color:var(--ink)}
+  .brand .ver{font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .spacer{flex:1}
+  .btn{
+    background:var(--panel-2);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:7px;transition:.12s;
+  }
+  .btn:hover{border-color:#3a4452;background:#283040}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent);color:#eafdff}
+  .btn.primary:hover{background:var(--accent)}
+  .btn.ghost{background:transparent}
+  .btn[disabled]{opacity:.4;cursor:not-allowed}
+  .btn svg{width:15px;height:15px}
+  .progress{font-family:var(--mono);font-size:12px;color:var(--ink-dim);white-space:nowrap}
+  .progress b{color:var(--ink)}
+
+  /* ---------- main 3-column ---------- */
+  .main{display:grid;grid-template-columns:230px 1fr 340px;min-height:0;overflow:hidden}
+  @media (max-width:1100px){.main{grid-template-columns:180px 1fr 300px}}
+
+  /* ---------- left: filmstrip ---------- */
+  .strip{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+  .strip-head{padding:10px 12px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:8px}
+  .strip-head .ttl{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--ink-faint)}
+  .filterbtn{margin-left:auto;font-size:11px;color:var(--ink-dim);background:none;border:1px solid var(--line);
+    border-radius:20px;padding:3px 9px;cursor:pointer}
+  .filterbtn.on{color:var(--accent);border-color:var(--accent-dim)}
+  .strip-list{overflow-y:auto;flex:1;padding:6px}
+  .frame{
+    display:flex;align-items:center;gap:9px;padding:6px;border-radius:7px;cursor:pointer;
+    border:1px solid transparent;position:relative;
+  }
+  .frame:hover{background:var(--panel-2)}
+  .frame.active{background:#23303a;border-color:var(--accent-dim)}
+  .thumb{width:46px;height:38px;border-radius:5px;object-fit:cover;background:#0d0f12;flex:none;
+    border:1px solid var(--line)}
+  .frame-meta{min-width:0;flex:1}
+  .frame-name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+  .frame-sub{font-family:var(--mono);font-size:10px;color:var(--ink-faint);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none;background:#3a4250}
+  .dot.s0{background:var(--s0)}.dot.s1{background:var(--s1)}
+  .dot.s2{background:var(--s2)}.dot.s3{background:var(--s3)}
+  .dot.done{background:var(--accent)}
+
+  /* ---------- center: viewer ---------- */
+  .viewer{position:relative;background:
+      radial-gradient(circle at 50% 40%,#1b1f25,#0f1216);
+      display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    cursor:grab;touch-action:none}
+  .stage.panning{cursor:grabbing}
+  .stage img{max-width:92%;max-height:92%;border-radius:4px;box-shadow:0 12px 50px rgba(0,0,0,.6);
+    transform-origin:center;user-select:none;-webkit-user-drag:none}
+  .empty{text-align:center;color:var(--ink-faint);max-width:380px;padding:30px}
+  .empty h2{color:var(--ink-dim);font-weight:600;font-size:16px;margin:0 0 8px}
+  .empty p{font-size:13px;line-height:1.6;margin:0 0 6px}
+  .empty code{font-family:var(--mono);font-size:12px;color:var(--accent);background:#101317;
+    padding:2px 6px;border-radius:4px}
+  .viewer-foot{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:14px;
+    padding:8px 14px;background:linear-gradient(0deg,rgba(15,18,22,.92),transparent);
+    font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+  .zoomctl{display:flex;align-items:center;gap:4px;margin-left:auto}
+  .zoomctl button{width:24px;height:24px;border-radius:5px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);cursor:pointer;font-size:14px;line-height:1}
+  .navarrow{position:absolute;top:50%;transform:translateY(-50%);width:38px;height:60px;
+    border:none;background:rgba(20,24,30,.55);color:var(--ink-dim);cursor:pointer;font-size:20px;
+    border-radius:8px;backdrop-filter:blur(2px);transition:.12s}
+  .navarrow:hover{background:rgba(30,38,48,.85);color:var(--ink)}
+  .navarrow.l{left:10px}.navarrow.r{right:10px}
+
+  /* ---------- right: annotation panel ---------- */
+  .panel{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel-head{padding:11px 14px;border-bottom:1px solid var(--line-soft)}
+  .panel-head .fname{font-family:var(--mono);font-size:12px;color:var(--ink);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .panel-head .pos{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:2px}
+  .panel-body{overflow-y:auto;flex:1;padding:4px 14px 30px}
+
+  .sect{padding:13px 0;border-bottom:1px solid var(--line-soft)}
+  .sect:last-child{border-bottom:none}
+  .sect > .lab{font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-faint);
+    margin-bottom:9px;display:flex;align-items:center;gap:8px}
+  .sect .lab .hint{font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--ink-faint);
+    font-size:10px;margin-left:auto}
+
+  /* disease toggle */
+  .seg{display:flex;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:3px;gap:3px}
+  .seg button{flex:1;background:none;border:none;color:var(--ink-dim);padding:7px;border-radius:6px;
+    cursor:pointer;font-size:13px}
+  .seg button.on{background:#2e3744;color:var(--ink)}
+
+  /* severity score buttons */
+  .scorerow{display:flex;gap:7px}
+  .scorebtn{flex:1;border:1px solid var(--line);background:var(--panel-2);border-radius:8px;
+    padding:9px 0;cursor:pointer;text-align:center;transition:.12s;position:relative}
+  .scorebtn .n{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--ink)}
+  .scorebtn .t{font-size:9.5px;color:var(--ink-faint);display:block;margin-top:1px}
+  .scorebtn:hover{border-color:#414b59}
+  .scorebtn.on{border-width:2px;padding:8px 0}
+  .scorebtn.on.v0{border-color:var(--s0)} .scorebtn.on.v0 .n{color:var(--s0)}
+  .scorebtn.on.v1{border-color:var(--s1)} .scorebtn.on.v1 .n{color:var(--s1)}
+  .scorebtn.on.v2{border-color:var(--s2)} .scorebtn.on.v2 .n{color:var(--s2)}
+  .scorebtn.on.v3{border-color:var(--s3)} .scorebtn.on.v3 .n{color:var(--s3)}
+
+  /* feature checklist */
+  .feat{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;cursor:pointer}
+  .feat:hover{background:var(--panel-2)}
+  .feat .box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--line);flex:none;
+    display:flex;align-items:center;justify-content:center}
+  .feat.on .box{background:var(--accent);border-color:var(--accent)}
+  .feat.on .box svg{width:11px;height:11px;stroke:#0c1417;stroke-width:3.5}
+  .feat .name{font-size:13px;color:var(--ink-dim)}
+  .feat.on .name{color:var(--ink)}
+
+  /* compact graded selects (UCEIS / SES-CD) */
+  .graded{margin-bottom:10px}
+  .graded .glab{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-dim);margin-bottom:5px}
+  .graded .glab b{font-family:var(--mono);color:var(--ink)}
+  .gopts{display:flex;gap:4px}
+  .gopt{flex:1;border:1px solid var(--line);background:var(--panel-2);border-radius:6px;
+    padding:6px 2px;font-size:10.5px;color:var(--ink-faint);cursor:pointer;text-align:center;line-height:1.2}
+  .gopt.on{background:#2e3744;color:var(--ink);border-color:var(--accent-dim)}
+  .sumline{font-family:var(--mono);font-size:12px;color:var(--ink-dim);margin-top:6px;
+    display:flex;justify-content:space-between}
+  .sumline b{color:var(--accent);font-size:14px}
+
+  /* misc fields */
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border:1px solid var(--line);background:var(--panel-2);color:var(--ink-dim);border-radius:20px;
+    padding:5px 11px;font-size:12px;cursor:pointer}
+  .chip.on{background:#2e3744;color:var(--ink);border-color:var(--accent-dim)}
+  textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);padding:9px;font-family:inherit;font-size:13px;resize:vertical;min-height:54px}
+  textarea:focus{outline:none;border-color:var(--accent-dim)}
+  .taginput{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);padding:8px 9px;font-size:12px;font-family:var(--mono)}
+  .taginput:focus{outline:none;border-color:var(--accent-dim)}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .tag{background:#23303a;border:1px solid var(--accent-dim);color:var(--accent);border-radius:5px;
+    padding:3px 8px;font-size:11px;font-family:var(--mono);display:flex;align-items:center;gap:6px}
+  .tag span{cursor:pointer;color:var(--ink-faint)}
+  .tag span:hover{color:var(--ink)}
+
+  .panel-foot{padding:10px 14px;border-top:1px solid var(--line-soft);display:flex;gap:8px;align-items:center}
+  .saved{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-left:auto}
+  .saved.flash{color:var(--s0)}
+
+  /* toast / kbd help */
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:#262d38;border:1px solid var(--line);color:var(--ink);padding:9px 16px;border-radius:9px;
+    font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:50;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .kbd{font-family:var(--mono);font-size:10px;background:#101317;border:1px solid var(--line);
+    border-radius:4px;padding:1px 5px;color:var(--ink-dim)}
+
+  .hidden{display:none!important}
+
+  /* tabs */
+  .modetabs{display:flex;gap:3px;padding:0 2px}
+  .modetab{background:none;border:1px solid transparent;border-radius:7px;
+    color:var(--ink-dim);padding:5px 13px;font-size:12px;cursor:pointer;font-family:inherit}
+  .modetab:hover{background:var(--panel-2);color:var(--ink)}
+  .modetab.on{background:var(--panel-2);border-color:var(--line);color:var(--ink)}
+  .modetab.seg-tab.on{border-color:var(--accent-dim);color:var(--accent)}
+
+  /* seg side panel */
+  #annotateView{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+  .seg-panel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+  .seg-ph{padding:11px 14px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:8px}
+  .seg-ph-title{font-size:12px;font-weight:600;color:var(--ink)}
+  .seg-body{overflow-y:auto;flex:1;padding:10px 12px 30px}
+  .seg-instr{font-size:11px;color:var(--ink-faint);line-height:1.6;
+    background:var(--panel-2);border-radius:8px;padding:9px 11px;margin-bottom:10px}
+  .draw-bar{display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
+  .draw-bar .seg-label-input{flex:1;min-width:80px}
+
+  /* SVG overlay */
+  .seg-svg-inner{position:absolute;top:0;left:0;pointer-events:none;overflow:visible;z-index:10}
+  .seg-svg-inner.drawing{pointer-events:auto;cursor:crosshair}
+  .seg-svg-inner.drag-vtx{pointer-events:auto;cursor:none}
+  .seg-poly{fill:rgba(196,63,156,.15);stroke:#c43f9c;stroke-width:2;stroke-linejoin:round;
+    cursor:pointer;vector-effect:non-scaling-stroke}
+  .seg-poly:hover{fill:rgba(196,63,156,.3)}
+  .seg-poly.selected{fill:rgba(196,63,156,.3);stroke:#fff;stroke-width:2.5;vector-effect:non-scaling-stroke}
+  .seg-ghost-line{fill:none;stroke:#c43f9c;stroke-width:1.5;stroke-dasharray:6 4;
+    opacity:.8;vector-effect:non-scaling-stroke}
+  .seg-vertex{fill:#c43f9c;stroke:#fff;stroke-width:1.5;vector-effect:non-scaling-stroke}
+  .seg-vertex.draggable{cursor:grab}
+  .seg-vertex.dragging{cursor:grabbing;fill:#fff}
+  .seg-count{position:absolute;top:10px;right:14px;font-family:var(--mono);font-size:11px;
+    color:var(--ink-faint);z-index:20;pointer-events:none}
+  .seg-draw-hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+    background:rgba(20,24,30,.82);border:1px solid var(--line);border-radius:8px;
+    padding:5px 12px;font-size:11px;color:var(--ink-dim);z-index:20;pointer-events:none;
+    display:none;white-space:nowrap}
+  .seg-draw-hint.show{display:block}
+
+  /* poly cards */
+  .poly-card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+    padding:8px 10px;margin-bottom:6px;cursor:pointer}
+  .poly-card:hover{border-color:#3a4452}
+  .poly-card.selected{border-color:var(--accent-dim);background:#23303a}
+  .poly-card-top{display:flex;align-items:center;gap:7px}
+  .poly-swatch{width:11px;height:11px;border-radius:3px;flex:none}
+  .poly-card-name{flex:1;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .poly-card-pts{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:none}
+  .poly-card-del{color:var(--ink-faint);font-size:16px;cursor:pointer;padding:0 2px;flex:none}
+  .poly-card-del:hover{color:#e05555}
+  .poly-edit{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);
+    display:flex;flex-direction:column;gap:7px}
+  .poly-edit label{font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.6px}
+  .poly-rename{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;
+    color:var(--ink);padding:6px 8px;font-size:13px;font-family:inherit}
+  .poly-rename:focus{outline:none;border-color:var(--accent-dim)}
+  .poly-edit-hint{font-size:11px;color:var(--ink-faint);line-height:1.5}
+  .poly-del-btn{background:none;border:1px solid #6b2020;border-radius:6px;color:#e05555;
+    padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;width:100%}
+  .poly-del-btn:hover{background:#6b2020;color:#fff}
+  .poly-empty{font-size:12px;color:var(--ink-faint);padding:8px 4px}
+
+  /* mini poly list in annotate panel */
+  .poly-item{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:6px;font-size:12px}
+  .poly-item:hover{background:var(--panel-2)}
+  .poly-item .poly-dot{width:9px;height:9px;border-radius:2px;flex:none}
+  .poly-item .poly-lbl{flex:1;color:var(--ink-dim)}
+
+  input[type=file]{display:none}
+  /* scrollbars */
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#2c333d;border-radius:6px;border:2px solid var(--panel)}
+  ::-webkit-scrollbar-thumb:hover{background:#39424e}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- top bar -->
+  <div class="topbar">
+    <div class="brand">
+      <span class="mark">IBD<b>Label</b></span>
+      <span class="ver">v1 · local</span>
+    </div>
+    <div class="modetabs">
+      <button class="modetab on" id="tabAnnotate">Annotate</button>
+      <button class="modetab seg-tab" id="tabSegment">✏ Segment</button>
+    </div>
+    <button class="btn primary" id="openDir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      Open folder
+    </button>
+    <button class="btn ghost" id="openFiles">Pick images</button>
+    <input type="file" id="fileInput" multiple accept="image/*" webkitdirectory />
+    <input type="file" id="fileInput2" multiple accept="image/*" />
+    <span class="spacer"></span>
+    <span class="progress" id="progress"></span>
+    <button class="btn ghost" id="importBtn" title="Load a previously exported annotations.json">Import</button>
+    <input type="file" id="jsonInput" accept=".json,application/json" />
+    <button class="btn ghost" id="saveDir" title="Write annotations.json into the opened folder" disabled>Save to folder</button>
+    <button class="btn" id="exportBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+      Export
+    </button>
+    <button class="btn ghost" id="helpBtn" title="Keyboard shortcuts">?</button>
+  </div>
+
+  <!-- main -->
+  <div class="main">
+    <!-- left filmstrip -->
+    <aside class="strip">
+      <div class="strip-head">
+        <span class="ttl">Frames</span>
+        <button class="filterbtn" id="filterBtn">unlabeled</button>
+      </div>
+      <div class="strip-list" id="stripList"></div>
+    </aside>
+
+    <!-- center viewer -->
+    <section class="viewer">
+      <div class="seg-draw-hint" id="segDrawHint">Click to place points · Double-click to close</div>
+      <span class="seg-count" id="segCount"></span>
+      <div class="stage" id="stage">
+        <div class="empty" id="emptyState">
+          <h2>No frames loaded</h2>
+          <p>Click <b>Open folder</b> and point it at your OneDrive-synced patient folder (the one that lives on this computer).</p>
+          <p style="color:var(--ink-faint);margin-top:12px">Everything stays local — images are read straight off disk and never uploaded. Your labels are saved beside them as <code>annotations.json</code>.</p>
+        </div>
+      </div>
+      <button class="navarrow l hidden" id="prevBtn">‹</button>
+      <button class="navarrow r hidden" id="nextBtn">›</button>
+      <div class="viewer-foot hidden" id="viewerFoot">
+        <span id="dims"></span>
+        <span class="zoomctl">
+          <button id="zoomOut">−</button>
+          <span id="zoomLvl">100%</span>
+          <button id="zoomIn">+</button>
+          <button id="zoomReset" title="Reset (0)">⟲</button>
+        </span>
+      </div>
+    </section>
+
+    <!-- right panel -->
+    <aside class="panel">
+      <div id="annotateView">
+      <div class="panel-head">
+        <div class="fname" id="curName">—</div>
+        <div class="pos" id="curPos"></div>
+      </div>
+      <div class="panel-body" id="panelBody">
+        <!-- disease -->
+        <div class="sect">
+          <div class="lab">Disease</div>
+          <div class="seg" id="diseaseSeg">
+            <button data-d="UC" class="on">Ulcerative colitis</button>
+            <button data-d="CD">Crohn's</button>
+          </div>
+        </div>
+
+        <!-- ===== UC block ===== -->
+        <div id="ucBlock">
+          <div class="sect">
+            <div class="lab">Mayo Score</div>
+            <div class="scorerow" id="mayoRow">
+              <button class="scorebtn" data-v="0"><span class="n">0</span><span class="t">Normal /<br>inactive</span></button>
+              <button class="scorebtn" data-v="1"><span class="n">1</span><span class="t">Mild</span></button>
+              <button class="scorebtn" data-v="2"><span class="n">2</span><span class="t">Moderate</span></button>
+              <button class="scorebtn" data-v="3"><span class="n">3</span><span class="t">Severe</span></button>
+            </div>
+          </div>
+
+          <div class="sect">
+            <div class="lab">Descriptors</div>
+
+            <div class="graded" data-g="erythema">
+              <div class="glab"><span>Erythema</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Mild</button>
+                <button class="gopt" data-i="2">Marked</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="vascular">
+              <div class="glab"><span>Vascular pattern</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">Normal</button>
+                <button class="gopt" data-i="1">Decreased</button>
+                <button class="gopt" data-i="2">Lack</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="friability">
+              <div class="glab"><span>Friability</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Mild</button>
+                <button class="gopt" data-i="2">Marked</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="spontBleed">
+              <div class="glab"><span>Spontaneous bleeding</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">No</button>
+                <button class="gopt" data-i="1">Yes</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="ulcerExtent">
+              <div class="glab"><span>Extent for ulcer</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Limited<br>&lt;10%</button>
+                <button class="gopt" data-i="2">Substantial<br>10–30%</button>
+                <button class="gopt" data-i="3">Extensive<br>&gt;30%</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="mucopus">
+              <div class="glab"><span>Mucopus</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Some</button>
+                <button class="gopt" data-i="2">Lots</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="mucoOedema">
+              <div class="glab"><span>Mucosal oedema</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Probable</button>
+                <button class="gopt" data-i="2">Definite</button>
+              </div>
+            </div>
+
+            <div class="graded" data-g="mucoSurf">
+              <div class="glab"><span>Mucosal surface (Granularity)</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">Normal</button>
+                <button class="gopt" data-i="1">Granular</button>
+                <button class="gopt" data-i="2">Nodular</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sect">
+            <div class="lab">Mucosal features</div>
+            <div id="ucFeats"></div>
+          </div>
+        </div>
+
+        <!-- ===== CD block ===== -->
+        <div id="cdBlock" class="hidden">
+          <div class="sect">
+            <div class="lab">SES-CD (this segment) <span class="hint" id="sesSum">—</span></div>
+            <div class="graded" data-g="ulcerSize">
+              <div class="glab"><span>Ulceration size</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Aphthoid<br>&lt;0.5cm</button>
+                <button class="gopt" data-i="2">0.5–2cm</button>
+                <button class="gopt" data-i="3">&gt;2cm</button>
+              </div>
+            </div>
+            <div class="graded" data-g="ulcSurface">
+              <div class="glab"><span>Ulcerated surface</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">&lt;10%</button>
+                <button class="gopt" data-i="2">10–30%</button>
+                <button class="gopt" data-i="3">&gt;30%</button>
+              </div>
+            </div>
+            <div class="graded" data-g="ulcerType">
+              <div class="glab"><span>Type of ulcer</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">Superficial</button>
+                <button class="gopt" data-i="1">Deep</button>
+              </div>
+            </div>
+            <div class="graded" data-g="affSurface">
+              <div class="glab"><span>Affected surface</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">&lt;50%</button>
+                <button class="gopt" data-i="2">50–75%</button>
+                <button class="gopt" data-i="3">&gt;75%</button>
+              </div>
+            </div>
+            <div class="graded" data-g="narrowing">
+              <div class="glab"><span>Stenosis</span><b class="gval">–</b></div>
+              <div class="gopts">
+                <button class="gopt" data-i="0">None</button>
+                <button class="gopt" data-i="1">Single,<br>passable</button>
+                <button class="gopt" data-i="2">Multiple,<br>passable</button>
+                <button class="gopt" data-i="3">Not<br>passable</button>
+              </div>
+            </div>
+            <div class="sumline"><span>Segment score</span><b id="sesTotal">–</b></div>
+          </div>
+
+          <div class="sect">
+            <div class="lab">Lesion features</div>
+            <div id="cdFeats"></div>
+          </div>
+        </div>
+
+        <!-- ===== common ===== -->
+        <div class="sect">
+          <div class="lab">Segment / location</div>
+          <div class="chips" id="regionChips"></div>
+        </div>
+        <div class="sect">
+          <div class="lab">Image readability</div>
+          <div class="chips" id="qualityChips"></div>
+        </div>
+        <div class="sect">
+          <div class="lab">Light mode</div>
+          <div class="chips" id="lightChips"></div>
+        </div>
+        <div class="sect hidden" id="limitSect">
+          <div class="lab">Limitations <span class="hint">(check all that apply)</span></div>
+          <div id="limitList"></div>
+        </div>
+        <div class="sect">
+          <div class="lab">Reader confidence</div>
+          <div class="chips" id="confChips"></div>
+        </div>
+        <div class="sect" id="segSect">
+          <div class="lab">Segmentations <span class="hint" id="segSumHint">—</span></div>
+          <div id="polyList"></div>
+        </div>
+        <div class="sect">
+          <div class="lab">Notes</div>
+          <textarea id="notes" placeholder="Free-text observations…"></textarea>
+        </div>
+        <div class="sect">
+          <div class="lab">Custom tags</div>
+          <input class="taginput" id="tagInput" placeholder="type a tag, press Enter" />
+          <div class="tags" id="tagList"></div>
+        </div>
+      </div>
+      <div class="panel-foot">
+        <button class="btn ghost" id="clearBtn">Clear frame</button>
+        <span class="saved" id="savedState">no folder loaded</span>
+      </div>
+      </div><!-- /annotateView -->
+      <!-- SEGMENT panel -->
+      <div id="segmentView" class="hidden seg-panel">
+        <div class="seg-ph">
+          <span class="seg-ph-title">Segmentation</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-left:auto" id="segFrameLbl"></span>
+        </div>
+        <div class="seg-body">
+          <div class="seg-instr">
+            <b>Draw:</b> click to place points · double-click to close polygon<br>
+            <b>Move vertex:</b> select a polygon, then drag any point<br>
+            <b>Rename:</b> click a polygon card to expand it
+          </div>
+          <div class="draw-bar">
+            <input class="seg-label-input" id="segLabelInput" placeholder="Label (e.g. ulcer)" />
+            <button class="segtool" id="segToggle">✏ Draw</button>
+            <button class="segtool" id="segFinish" style="display:none">✓ Done</button>
+            <button class="segtool danger" id="segCancel" style="display:none">✕</button>
+          </div>
+          <div id="polyCards"></div>
+          <div class="poly-empty hidden" id="polyEmpty">No polygons yet — draw one above.</div>
+        </div>
+      </div><!-- /segmentView -->
+    </aside>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   IBDLabel — IBD endoscopy frame annotator
+   - reads images from a local (OneDrive-synced) folder
+   - annotations keyed by filename, persisted in artifact storage
+     + exportable to annotations.json (CSV too)
+   ============================================================ */
+
+const STORAGE_KEY = "ibdlabel:annotations:v2";
+const IMG_RE = /\.(jpe?g|png|bmp|webp|gif|tiff?)$/i;
+
+const REGIONS = ["Rectum","Sigmoid","Descending","Transverse","Ascending","Caecum","Terminal ileum","Anastomosis","Pouch","Other"];
+const QUALITY = ["Readable","Readable, not optimal","Not readable"];
+const LIMITATIONS = ["Inadequate bowel cleanliness","Inadequate video quality","Inadequate washing",
+  "Inadequate withdrawal time","Underdistension","Incomplete examination","Light mode other than WLE","Other"];
+const LIGHT   = ["WLE","BLI","LCI","NBI","TXI"];
+const CONF    = ["Low","Medium","High"];
+const UC_FEATURES = ["Erythema","Vascular pattern lost","Friability (contact bleed)","Spontaneous bleeding",
+  "Granularity","Mucopus / exudate","Erosions","Shallow ulcers","Deep ulcers","Pseudopolyps"];
+const CD_FEATURES = ["Aphthous ulcers","Large ulcers","Cobblestoning","Stenosis","Erythema","Edema",
+  "Pseudopolyps","Fistula opening","Skip lesions"];
+
+/* ---- state ---- */
+let frames = [];        // {name, file, url, handle?}
+let idx = -1;           // current frame index
+let ann = {};           // {filename: annotation}
+let segDrawing = false; // segmentation draw mode active
+let activeTab  = "annotate"; // "annotate" | "segment"
+let dirHandle = null;   // FileSystemDirectoryHandle when available
+let filterUnlabeled = false;
+let zoom = 1, panX = 0, panY = 0;
+
+/* ---- storage helpers (graceful if unavailable) ---- */
+const hasStore = (typeof window !== "undefined" && window.storage && typeof window.storage.get === "function");
+async function loadStore(){
+  if(!hasStore) return;
+  try{ const r = await window.storage.get(STORAGE_KEY); if(r&&r.value) ann = JSON.parse(r.value); }
+  catch(e){ /* key absent or unavailable */ }
+}
+let saveTimer=null;
+function persist(){
+  flashSaved();
+  if(!hasStore) return;
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(async()=>{
+    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(ann), false); }catch(e){}
+  },300);
+}
+
+/* ---- annotation factory ---- */
+function blank(){
+  return {disease:"UC", mayo:null,
+    uc:{erythema:null,vascular:null,friability:null,spontBleed:null,ulcerExtent:null,mucopus:null,mucoOedema:null,mucoSurf:null},
+    ses:{ulcerSize:null,ulcSurface:null,ulcerType:null,affSurface:null,narrowing:null},
+    ucFeat:{}, cdFeat:{}, region:null, quality:null, limitations:{}, light:null, conf:null, notes:"", tags:[], ts:null};
+}
+function cur(){
+  if(idx<0) return null;
+  const n=frames[idx].name;
+  if(!ann[n]) ann[n]=blank();
+  const a=ann[n];
+  if(!a.uc) a.uc={erythema:null,vascular:null,friability:null,spontBleed:null,ulcerExtent:null,mucopus:null,mucoOedema:null,mucoSurf:null};
+  if(a.ses && a.ses.ulcerType===undefined) a.ses.ulcerType=null;
+  if(!a.limitations) a.limitations={};
+  if(!a.polygons) a.polygons=[];
+  return a;
+}
+function isLabeled(n){
+  const a=ann[n]; if(!a) return false;
+  if(a.disease==="UC") return a.mayo!==null || Object.values(a.uc).some(v=>v!==null);
+  return Object.values(a.ses).some(v=>v!==null);
+}
+function frameDot(n){
+  const a=ann[n];
+  if(a && a.disease==="UC" && a.mayo!==null) return "s"+a.mayo;
+  if(isLabeled(n)) return "done";
+  return "";
+}
+
+/* ============================================================
+   FILE LOADING
+   ============================================================ */
+const $=s=>document.querySelector(s);
+const $$=s=>[...document.querySelectorAll(s)];
+
+$("#openDir").addEventListener("click", async ()=>{
+  if(window.showDirectoryPicker){
+    try{
+      dirHandle = await window.showDirectoryPicker({mode:"readwrite"});
+      const fs=[];
+      async function scanDir(dh,prefix){
+        for await (const [name,h] of dh.entries()){
+          const full=prefix?prefix+"/"+name:name;
+          if(h.kind==="file"&&IMG_RE.test(name)){ fs.push({name:full,handle:h}); }
+          if(name==="annotations.json"&&h.kind==="file"&&!prefix){ tryLoadDirJson(h); }
+          if(h.kind==="directory"){ try{await scanDir(h,full);}catch(e){} }
+        }
+      }
+      await scanDir(dirHandle,"");
+      fs.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+      for(const f of fs){ const file=await f.handle.getFile(); f.file=file; f.url=URL.createObjectURL(file); }
+      ingest(fs);
+      $("#saveDir").disabled=false;
+      toast(`Loaded ${fs.length} frames — labels save to this folder`);
+    }catch(e){ if(e.name!=="AbortError") toast("Couldn't open folder: "+e.message); }
+  }else{
+    toast("This browser lacks folder access — use \u201CPick images\u201D instead");
+    $("#fileInput").click();
+  }
+});
+async function tryLoadDirJson(h){
+  try{ const f=await h.getFile(); const j=JSON.parse(await f.text());
+    if(j&&j.annotations){ ann={...j.annotations,...ann}; } }catch(e){}
+}
+$("#openFiles").addEventListener("click",()=>$("#fileInput2").click());
+function fromInput(files){
+  const fs=[...files].filter(f=>IMG_RE.test(f.name))
+    .map(f=>({name:f.name,file:f,url:URL.createObjectURL(f)}))
+    .sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  ingest(fs); $("#saveDir").disabled=true;
+  toast(`Loaded ${fs.length} frames`);
+}
+$("#fileInput").addEventListener("change",e=>fromInput(e.target.files));
+$("#fileInput2").addEventListener("change",e=>fromInput(e.target.files));
+
+function ingest(fs){
+  frames.forEach(f=>f.url&&URL.revokeObjectURL(f.url));
+  frames=fs; idx = frames.length?0:-1;
+  renderStrip(); show(); updateProgress();
+  $("#savedState").textContent = hasStore? "auto-saving" : "export to keep labels";
+}
+
+/* ============================================================
+   FILMSTRIP
+   ============================================================ */
+function renderStrip(){
+  const list=$("#stripList"); list.innerHTML="";
+  frames.forEach((f,i)=>{
+    if(filterUnlabeled && isLabeled(f.name)) return;
+    const el=document.createElement("div");
+    el.className="frame"+(i===idx?" active":"");
+    el.innerHTML=`<span class="dot ${frameDot(f.name)}"></span>
+      <img class="thumb" src="${f.url}" loading="lazy" alt="">
+      <div class="frame-meta"><div class="frame-name">${esc(f.name)}</div>
+      <div class="frame-sub">${subLabel(f.name)}</div></div>`;
+    el.addEventListener("click",()=>{idx=i;show();renderStrip();});
+    list.appendChild(el);
+  });
+}
+function subLabel(n){
+  const a=ann[n]; if(!a) return "unlabeled";
+  if(a.disease==="UC"){ const p=[]; if(a.mayo!==null)p.push("Mayo "+a.mayo);
+    return p.length?p.join(" · "):"unlabeled"; }
+  const s=sesTotal(a); return s!==null? "SES-CD "+s : "unlabeled";
+}
+
+/* ============================================================
+   VIEWER
+   ============================================================ */
+function show(){
+  const stage=$("#stage");
+  if(idx<0){ stage.innerHTML='<div class="empty" id="emptyState"><h2>No frames loaded</h2><p>Open a folder to begin.</p></div>';
+    $("#viewerFoot").classList.add("hidden");$("#prevBtn").classList.add("hidden");$("#nextBtn").classList.add("hidden");
+    $("#curName").textContent="—";$("#curPos").textContent="";return; }
+  const f=frames[idx];
+  zoom=1;panX=0;panY=0;
+  stage.innerHTML=`<img id="mainImg" src="${f.url}" alt="${esc(f.name)}"><svg id="segSvg" class="seg-svg-inner" xmlns="http://www.w3.org/2000/svg"></svg>`;
+  const img=$("#mainImg");
+  img.onload=()=>{ $("#dims").textContent=`${img.naturalWidth}×${img.naturalHeight}px`; applyTransform(); attachSvgEvents(); };
+  $("#viewerFoot").classList.remove("hidden");
+  $("#prevBtn").classList.toggle("hidden",frames.length<2);
+  $("#nextBtn").classList.toggle("hidden",frames.length<2);
+  $("#curName").textContent=f.name;
+  $("#curPos").textContent=`frame ${idx+1} of ${frames.length}`;
+  bindPanel();
+  if(typeof redrawSeg==="function") redrawSeg();
+  if(typeof renderPolyCards==="function"&&activeTab==="segment") renderPolyCards();
+}
+function applyTransform(){
+  const img=$("#mainImg"); if(!img)return;
+  img.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
+  $("#zoomLvl").textContent=Math.round(zoom*100)+"%";
+  if(typeof syncSvgViewBox==="function") syncSvgViewBox();
+  if(typeof redrawSeg==="function") redrawSeg();
+}
+function setZoom(z,cx,cy){
+  const old=zoom; zoom=Math.min(8,Math.max(0.5,z));
+  if(cx!=null){ const r=zoom/old; panX=cx-(cx-panX)*r; panY=cy-(cy-panY)*r; }
+  applyTransform();
+}
+$("#zoomIn").onclick=()=>setZoom(zoom*1.25);
+$("#zoomOut").onclick=()=>setZoom(zoom/1.25);
+$("#zoomReset").onclick=()=>{zoom=1;panX=0;panY=0;applyTransform();};
+const stageEl=$("#stage");
+stageEl.addEventListener("wheel",e=>{e.preventDefault(); if(segDrawing)return;
+  const r=stageEl.getBoundingClientRect();
+  setZoom(zoom*(e.deltaY<0?1.1:0.9), e.clientX-r.left-r.width/2, e.clientY-r.top-r.height/2);
+},{passive:false});
+let dragging=false,sx,sy;
+stageEl.addEventListener("pointerdown",e=>{if(idx<0||segDrawing)return;dragging=true;sx=e.clientX-panX;sy=e.clientY-panY;
+  stageEl.classList.add("panning");stageEl.setPointerCapture(e.pointerId);});
+stageEl.addEventListener("pointermove",e=>{if(!dragging)return;panX=e.clientX-sx;panY=e.clientY-sy;applyTransform();});
+stageEl.addEventListener("pointerup",()=>{dragging=false;stageEl.classList.remove("panning");});
+$("#prevBtn").onclick=()=>nav(-1); $("#nextBtn").onclick=()=>nav(1);
+function nav(d){ if(idx<0)return; idx=(idx+d+frames.length)%frames.length; show(); renderStrip(); scrollStripToActive(); }
+function scrollStripToActive(){ const a=$(".frame.active"); if(a)a.scrollIntoView({block:"nearest"}); }
+
+/* ============================================================
+   ANNOTATION PANEL — build static chip/feature lists once
+   ============================================================ */
+function buildChips(host, vals, key){
+  host.innerHTML="";
+  vals.forEach(v=>{ const b=document.createElement("button"); b.className="chip"; b.textContent=v;
+    b.onclick=()=>{ const a=cur(); if(!a)return; a[key]=(a[key]===v?null:v); a.ts=Date.now(); bindPanel(); persist(); };
+    host.appendChild(b); });
+}
+function buildFeats(host, vals, key){
+  host.innerHTML="";
+  vals.forEach(v=>{ const el=document.createElement("div"); el.className="feat";
+    el.innerHTML=`<span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 13l4 4L19 7"/></svg></span><span class="name">${esc(v)}</span>`;
+    el.onclick=()=>{ const a=cur(); if(!a)return; a[key][v]=!a[key][v]; if(!a[key][v])delete a[key][v]; a.ts=Date.now(); bindPanel(); persist(); };
+    host.appendChild(el); });
+}
+buildChips($("#regionChips"),REGIONS,"region");
+buildChips($("#qualityChips"),QUALITY,"quality");
+buildChips($("#lightChips"),LIGHT,"light");
+buildChips($("#confChips"),CONF,"conf");
+buildFeats($("#ucFeats"),UC_FEATURES,"ucFeat");
+buildFeats($("#cdFeats"),CD_FEATURES,"cdFeat");
+buildFeats($("#limitList"),LIMITATIONS,"limitations");
+
+/* disease toggle */
+$("#diseaseSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+  const a=cur(); if(!a)return; a.disease=b.dataset.d; a.ts=Date.now(); bindPanel(); persist(); });
+
+/* mayo */
+$("#mayoRow").addEventListener("click",e=>{ const b=e.target.closest(".scorebtn"); if(!b)return;
+  const a=cur(); if(!a)return; const v=+b.dataset.v; a.mayo=(a.mayo===v?null:v); a.ts=Date.now();
+  bindPanel(); renderStrip(); updateProgress(); persist(); });
+
+/* graded selects (UC descriptors + SES-CD) — event delegation on panel body */
+$("#panelBody").addEventListener("click",e=>{
+  const opt=e.target.closest(".gopt"); if(!opt)return;
+  const g=opt.closest(".graded").dataset.g; const i=+opt.dataset.i;
+  const a=cur(); if(!a)return;
+  const map={
+    erythema:"uc.erythema", vascular:"uc.vascular", friability:"uc.friability",
+    spontBleed:"uc.spontBleed", ulcerExtent:"uc.ulcerExtent", mucopus:"uc.mucopus",
+    mucoOedema:"uc.mucoOedema", mucoSurf:"uc.mucoSurf",
+    ulcerSize:"ses.ulcerSize", ulcSurface:"ses.ulcSurface", ulcerType:"ses.ulcerType",
+    affSurface:"ses.affSurface", narrowing:"ses.narrowing"
+  };
+  if(!map[g]) return;
+  const [grp,fld]=map[g].split(".");
+  a[grp][fld] = (a[grp][fld]===i?null:i); a.ts=Date.now();
+  bindPanel(); renderStrip(); updateProgress(); persist();
+});
+
+/* notes + tags */
+$("#notes").addEventListener("input",e=>{ const a=cur(); if(!a)return; a.notes=e.target.value; a.ts=Date.now(); persist(); });
+$("#tagInput").addEventListener("keydown",e=>{ if(e.key!=="Enter")return; const v=e.target.value.trim(); if(!v)return;
+  const a=cur(); if(!a)return; if(!a.tags.includes(v))a.tags.push(v); e.target.value=""; a.ts=Date.now(); bindPanel(); persist(); });
+$("#clearBtn").addEventListener("click",()=>{ if(idx<0)return; ann[frames[idx].name]=blank(); bindPanel(); renderStrip(); updateProgress(); persist(); toast("Frame cleared"); });
+
+/* reflect current annotation into UI */
+function bindPanel(){
+  const a=cur(); if(!a){return;}
+  // disease
+  $$("#diseaseSeg button").forEach(b=>b.classList.toggle("on",b.dataset.d===a.disease));
+  $("#ucBlock").classList.toggle("hidden",a.disease!=="UC");
+  $("#cdBlock").classList.toggle("hidden",a.disease!=="CD");
+  // mayo
+  $$("#mayoRow .scorebtn").forEach(b=>{ const on=(+b.dataset.v===a.mayo);
+    b.className="scorebtn"+(on?" on v"+b.dataset.v:""); });
+  // UC graded descriptors
+  setGraded("erythema",a.uc.erythema); setGraded("vascular",a.uc.vascular);
+  setGraded("friability",a.uc.friability); setGraded("spontBleed",a.uc.spontBleed);
+  setGraded("ulcerExtent",a.uc.ulcerExtent); setGraded("mucopus",a.uc.mucopus);
+  setGraded("mucoOedema",a.uc.mucoOedema); setGraded("mucoSurf",a.uc.mucoSurf);
+  // SES-CD graded
+  setGraded("ulcerSize",a.ses.ulcerSize); setGraded("ulcSurface",a.ses.ulcSurface);
+  setGraded("ulcerType",a.ses.ulcerType);
+  setGraded("affSurface",a.ses.affSurface); setGraded("narrowing",a.ses.narrowing);
+  const st=sesTotal(a); $("#sesSum").textContent = st!==null? "total "+st : "—";
+  $("#sesTotal").textContent = st!==null? st : "–";
+  // feats
+  $$("#ucFeats .feat").forEach(el=>el.classList.toggle("on",!!a.ucFeat[el.querySelector(".name").textContent]));
+  $$("#cdFeats .feat").forEach(el=>el.classList.toggle("on",!!a.cdFeat[el.querySelector(".name").textContent]));
+  // chips
+  syncChips("#regionChips",a.region); syncChips("#qualityChips",a.quality); syncChips("#lightChips",a.light); syncChips("#confChips",a.conf);
+  // limitations checklist — show only when not fully readable
+  const showLimits = a.quality && a.quality !== "Readable";
+  $("#limitSect").classList.toggle("hidden", !showLimits);
+  $$("#limitList .feat").forEach(el=>{
+    const nm=el.querySelector(".name").textContent;
+    el.classList.toggle("on",!!a.limitations[nm]);
+  });
+  // notes/tags
+  $("#notes").value=a.notes||"";
+  $("#tagList").innerHTML=a.tags.map((t,i)=>`<span class="tag">${esc(t)}<span data-i="${i}">×</span></span>`).join("");
+  $$("#tagList .tag span").forEach(s=>s.onclick=()=>{a.tags.splice(+s.dataset.i,1);bindPanel();persist();});
+}
+function setGraded(g,val){
+  $$(`.graded[data-g="${g}"] .gopt`).forEach(o=>o.classList.toggle("on",+o.dataset.i===val));
+  const lab=$(`.graded[data-g="${g}"] .gval`); if(lab)lab.textContent = val==null?"–":val;
+}
+function syncChips(sel,val){ $$(`${sel} .chip`).forEach(c=>c.classList.toggle("on",c.textContent===val)); }
+
+function sesTotal(a){ const s=a.ses; const vals=[s.ulcerSize,s.ulcSurface,s.affSurface,s.narrowing];
+  if(vals.every(x=>x==null))return null; return vals.reduce((t,x)=>t+(x||0),0); }
+
+/* ============================================================
+   PROGRESS / FILTER / SAVE INDICATOR
+   ============================================================ */
+function updateProgress(){
+  const total=frames.length; const done=frames.filter(f=>isLabeled(f.name)).length;
+  $("#progress").textContent = total? `${done} / ${total} labeled` : "no frames";
+}
+$("#filterBtn").addEventListener("click",e=>{ filterUnlabeled=!filterUnlabeled;
+  e.target.classList.toggle("on",filterUnlabeled); renderStrip(); });
+let flashTimer=null;
+function flashSaved(){ const el=$("#savedState"); el.textContent="saved"; el.classList.add("flash");
+  clearTimeout(flashTimer); flashTimer=setTimeout(()=>{el.classList.remove("flash");
+    el.textContent= hasStore?"auto-saving":"export to keep labels";},900); }
+
+/* ============================================================
+   EXPORT / IMPORT / SAVE-TO-FOLDER
+   ============================================================ */
+function buildExport(){
+  return {tool:"IBDLabel", version:1, exportedAt:new Date().toISOString(),
+    frameCount:frames.length, annotations:ann};
+}
+function flatRow(name,a){
+  return {filename:name, disease:a.disease,
+    mayo:a.mayo,
+    uc_erythema:a.uc.erythema, uc_vascular:a.uc.vascular, uc_friability:a.uc.friability,
+    uc_spont_bleed:a.uc.spontBleed, uc_ulcer_extent:a.uc.ulcerExtent,
+    uc_mucopus:a.uc.mucopus, uc_muco_oedema:a.uc.mucoOedema, uc_muco_surf:a.uc.mucoSurf,
+    sescd_total:sesTotal(a), ses_ulcerSize:a.ses.ulcerSize, ses_ulcSurface:a.ses.ulcSurface,
+    ses_ulcerType:a.ses.ulcerType, ses_affSurface:a.ses.affSurface, ses_narrowing:a.ses.narrowing,
+    region:a.region, quality:a.quality, light_mode:a.light,
+    limitations:Object.keys(a.limitations||{}).join("; "),
+    confidence:a.conf,
+    features:[...Object.keys(a.ucFeat),...Object.keys(a.cdFeat)].join("; "),
+    tags:a.tags.join("; "), notes:(a.notes||"").replace(/\s+/g," ").trim(),
+    polygon_count:(a.polygons||[]).length,
+    polygons:JSON.stringify((a.polygons||[]).map(p=>({label:p.label,points:p.points}))),
+    updated:a.ts?new Date(a.ts).toISOString():""};
+}
+function toCSV(){
+  const rows=Object.entries(ann).filter(([n])=>frames.some(f=>f.name===n)||true).map(([n,a])=>flatRow(n,a));
+  if(!rows.length)return "";
+  const cols=Object.keys(rows[0]);
+  const esc=v=>{v=v==null?"":String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  return [cols.join(","),...rows.map(r=>cols.map(c=>esc(r[c])).join(","))].join("\n");
+}
+function download(name,text,type){ const b=new Blob([text],{type}); const u=URL.createObjectURL(b);
+  const a=document.createElement("a"); a.href=u; a.download=name; a.click(); URL.revokeObjectURL(u); }
+
+$("#exportBtn").addEventListener("click",()=>{
+  if(!Object.keys(ann).length){toast("Nothing to export yet");return;}
+  download("annotations.json",JSON.stringify(buildExport(),null,2),"application/json");
+  download("annotations.csv",toCSV(),"text/csv");
+  toast("Exported JSON + CSV");
+});
+$("#saveDir").addEventListener("click",async()=>{
+  if(!dirHandle){toast("Open a folder first");return;}
+  try{
+    const fh=await dirHandle.getFileHandle("annotations.json",{create:true});
+    const w=await fh.createWritable(); await w.write(JSON.stringify(buildExport(),null,2)); await w.close();
+    const cf=await dirHandle.getFileHandle("annotations.csv",{create:true});
+    const cw=await cf.createWritable(); await cw.write(toCSV()); await cw.close();
+    toast("Saved annotations.json + .csv to folder");
+  }catch(e){ toast("Save failed: "+e.message); }
+});
+$("#importBtn").addEventListener("click",()=>$("#jsonInput").click());
+$("#jsonInput").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f)return;
+  try{ const j=JSON.parse(await f.text());
+    const incoming=j.annotations||j;
+    ann={...ann,...incoming}; // explicit load: imported labels take precedence
+    bindPanel();renderStrip();updateProgress();persist();
+    toast("Imported "+Object.keys(incoming).length+" annotations");
+  }catch(err){ toast("Couldn't read that file"); }
+});
+
+/* ============================================================
+   SEGMENTATION MODULE v3
+   SVG lives inside .stage as sibling to <img>.
+   viewBox = image natural pixels → no coordinate math needed.
+   ============================================================ */
+
+let segPts     = [];      // in-progress: image-pixel coords
+let segSelId   = null;    // selected polygon id
+let mousePt    = null;    // live cursor for ghost preview
+let dragVtx    = null;    // {polyId, ptIdx} while dragging vertex
+/* label colour palette */
+const PALETTE = ["#c43f9c","#41b8e0","#5cb87a","#e0b341","#e08b41","#d65151","#9b59b6","#1abc9c"];
+const _labelColors = {};
+function colorFor(lbl){
+  if(!_labelColors[lbl]){
+    const n=Object.keys(_labelColors).length;
+    _labelColors[lbl]=PALETTE[n%PALETTE.length];
+  }
+  return _labelColors[lbl];
+}
+
+/* ── Tab switching ── */
+function switchTab(tab){
+  activeTab=tab;
+  $("#annotateView").classList.toggle("hidden", tab!=="annotate");
+  $("#segmentView").classList.toggle("hidden",  tab!=="segment");
+  $("#tabAnnotate").classList.toggle("on", tab==="annotate");
+  $("#tabSegment").classList.toggle("on",  tab==="segment");
+  if(tab==="segment"){ renderPolyCards(); }
+  else { cancelDrawing(); }
+}
+$("#tabAnnotate").addEventListener("click",()=>switchTab("annotate"));
+$("#tabSegment").addEventListener("click",()=>switchTab("segment"));
+
+/* ── SVG helpers ── */
+function getSegSvg(){ return $("#segSvg"); }
+function imgSize(){ const img=$("#mainImg"); return img?{W:img.naturalWidth,H:img.naturalHeight}:null; }
+
+function syncSvgViewBox(){
+  const svg=getSegSvg(); if(!svg) return;
+  const img=$("#mainImg"); if(!img) return;
+  const sz=imgSize(); if(!sz||!sz.W) return;
+  const ir=img.getBoundingClientRect();
+  const sr=$("#stage").getBoundingClientRect();
+  svg.setAttribute("viewBox",`0 0 ${sz.W} ${sz.H}`);
+  svg.style.width  = ir.width+"px";
+  svg.style.height = ir.height+"px";
+  svg.style.left   = (ir.left-sr.left)+"px";
+  svg.style.top    = (ir.top -sr.top )+"px";
+}
+
+function evtToImg(e){
+  const svg=getSegSvg(); if(!svg) return null;
+  const pt=svg.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY;
+  const s=pt.matrixTransform(svg.getScreenCTM().inverse());
+  return {x:Math.round(s.x*10)/10, y:Math.round(s.y*10)/10};
+}
+
+function ptsStr(pts){ return pts.map(p=>p.x+","+p.y).join(" "); }
+
+/* ── Draw ── */
+function redrawSeg(){
+  const svg=getSegSvg();
+  const hasImg=!!$("#mainImg");
+  const segCountEl=$("#segCount");
+  if(segCountEl) segCountEl.classList.toggle("hidden",!hasImg);
+  if(!svg){ updatePolyMiniList(); return; }
+  syncSvgViewBox();
+  svg.innerHTML="";
+  if(!hasImg){ updatePolyMiniList(); return; }
+  const a=cur(); if(!a){ updatePolyMiniList(); return; }
+
+  (a.polygons||[]).forEach(poly=>{
+    const col=colorFor(poly.label||"lesion");
+    const isSel=poly.id===segSelId;
+    // fill polygon
+    const pg=document.createElementNS("http://www.w3.org/2000/svg","polygon");
+    pg.setAttribute("points",ptsStr(poly.points));
+    pg.classList.add("seg-poly");
+    if(isSel) pg.classList.add("selected");
+    pg.style.stroke=col;
+    const r=parseInt(col.slice(1,3),16), g=parseInt(col.slice(3,5),16), b=parseInt(col.slice(5,7),16);
+    pg.style.fill=`rgba(${r},${g},${b},${isSel?0.3:0.15})`;
+    pg.addEventListener("click",e=>{ if(segDrawing)return; e.stopPropagation();
+      segSelId=(segSelId===poly.id)?null:poly.id; renderPolyCards(); redrawSeg(); });
+    svg.appendChild(pg);
+    // label
+    const cx=poly.points.reduce((s,p)=>s+p.x,0)/poly.points.length;
+    const cy=poly.points.reduce((s,p)=>s+p.y,0)/poly.points.length;
+    const txt=document.createElementNS("http://www.w3.org/2000/svg","text");
+    txt.setAttribute("x",cx); txt.setAttribute("y",cy);
+    txt.setAttribute("text-anchor","middle"); txt.setAttribute("dominant-baseline","middle");
+    txt.setAttribute("fill","#fff"); txt.setAttribute("font-size","14");
+    txt.setAttribute("font-family","ui-monospace,monospace");
+    txt.setAttribute("pointer-events","none");
+    txt.setAttribute("paint-order","stroke");
+    txt.setAttribute("stroke","#111"); txt.setAttribute("stroke-width","3");
+    txt.textContent=poly.label||"";
+    svg.appendChild(txt);
+    // vertices — only show when selected (for drag)
+    if(isSel){
+      poly.points.forEach((p,pi)=>{
+        const c=document.createElementNS("http://www.w3.org/2000/svg","circle");
+        c.setAttribute("cx",p.x); c.setAttribute("cy",p.y); c.setAttribute("r",6);
+        c.classList.add("seg-vertex","draggable");
+        c.style.fill=col; c.style.stroke="#fff";
+        c.setAttribute("data-pi",pi);
+        svg.appendChild(c);
+      });
+    } else {
+      // small dots always visible
+      poly.points.forEach(p=>{
+        const c=document.createElementNS("http://www.w3.org/2000/svg","circle");
+        c.setAttribute("cx",p.x); c.setAttribute("cy",p.y); c.setAttribute("r",3);
+        c.classList.add("seg-vertex"); c.style.fill=col; c.style.stroke="#fff";
+        c.setAttribute("pointer-events","none");
+        svg.appendChild(c);
+      });
+    }
+  });
+
+  // ghost while drawing
+  if(segDrawing&&segPts.length){
+    const allPts=mousePt?[...segPts,mousePt]:segPts;
+    if(allPts.length>=3){
+      const pf=document.createElementNS("http://www.w3.org/2000/svg","polygon");
+      pf.setAttribute("points",ptsStr(allPts));
+      pf.setAttribute("fill","rgba(196,63,156,.1)"); pf.setAttribute("stroke","none");
+      pf.setAttribute("pointer-events","none");
+      svg.appendChild(pf);
+    }
+    const pl=document.createElementNS("http://www.w3.org/2000/svg","polyline");
+    pl.setAttribute("points",ptsStr(allPts));
+    pl.classList.add("seg-ghost-line");
+    svg.appendChild(pl);
+    segPts.forEach(p=>{
+      const c=document.createElementNS("http://www.w3.org/2000/svg","circle");
+      c.setAttribute("cx",p.x); c.setAttribute("cy",p.y); c.setAttribute("r",5);
+      c.classList.add("seg-vertex"); c.style.fill="#c43f9c"; c.style.stroke="#fff";
+      svg.appendChild(c);
+    });
+  }
+
+  const n=(a.polygons||[]).length;
+  if(segCountEl) segCountEl.textContent=n? n+" polygon"+(n>1?"s":""):"";
+  updatePolyMiniList(a);
+}
+
+/* ── SVG events ── */
+function onSvgMouseMove(e){
+  if(segDrawing){ mousePt=evtToImg(e); redrawSeg(); return; }
+  if(dragVtx){ doVertexDrag(e); }
+}
+function onSvgClick(e){
+  if(!segDrawing) return;
+  if(e.detail>=2) return; // ignore 2nd click of dblclick
+  const pt=evtToImg(e); if(!pt) return;
+  segPts.push(pt); redrawSeg();
+}
+function onSvgDblClick(e){
+  if(!segDrawing) return;
+  e.preventDefault();
+  if(segPts.length>0) segPts.pop(); // remove phantom from click
+  finishPolygon();
+}
+function onSvgPointerDown(e){
+  if(segDrawing) return;
+  const svg=getSegSvg(); if(!svg||!segSelId) return;
+  const a=cur(); if(!a) return;
+  const poly=a.polygons.find(p=>p.id===segSelId); if(!poly) return;
+  const ip=evtToImg(e); if(!ip) return;
+  // find vertex within threshold (in image px)
+  const sz=imgSize()||{W:1}; const ir=svg.getBoundingClientRect();
+  const thresh=14*(sz.W/ir.width);
+  let best=null, bestD=Infinity;
+  poly.points.forEach((p,i)=>{
+    const d=Math.hypot(p.x-ip.x,p.y-ip.y);
+    if(d<thresh&&d<bestD){bestD=d;best=i;}
+  });
+  if(best===null) return;
+  e.stopPropagation();
+  dragVtx={polyId:segSelId,ptIdx:best};
+  svg.classList.add("drag-vtx");
+  svg.setPointerCapture(e.pointerId);
+}
+function doVertexDrag(e){
+  if(!dragVtx) return;
+  const a=cur(); if(!a) return;
+  const poly=a.polygons.find(p=>p.id===dragVtx.polyId); if(!poly) return;
+  const ip=evtToImg(e); if(!ip) return;
+  poly.points[dragVtx.ptIdx]=ip;
+  a.ts=Date.now();
+  redrawSeg();
+}
+function onSvgPointerUp(e){
+  if(!dragVtx) return;
+  dragVtx=null;
+  const svg=getSegSvg(); if(svg) svg.classList.remove("drag-vtx");
+  persist(); renderPolyCards();
+}
+
+function attachSvgEvents(){
+  const svg=getSegSvg(); if(!svg) return;
+  svg.addEventListener("mousemove",onSvgMouseMove);
+  svg.addEventListener("click",onSvgClick);
+  svg.addEventListener("dblclick",onSvgDblClick);
+  svg.addEventListener("pointerdown",onSvgPointerDown);
+  svg.addEventListener("pointermove",e=>{if(dragVtx)doVertexDrag(e);});
+  svg.addEventListener("pointerup",onSvgPointerUp);
+}
+
+/* ── Drawing control ── */
+function startDrawing(){
+  segDrawing=true; segPts=[]; mousePt=null;
+  const svg=getSegSvg(); if(svg) svg.classList.add("drawing");
+  const hint=$("#segDrawHint"); if(hint) hint.classList.add("show");
+  setSeg2UI(true);
+}
+function cancelDrawing(){
+  segDrawing=false; segPts=[]; mousePt=null;
+  const svg=getSegSvg(); if(svg) svg.classList.remove("drawing");
+  const hint=$("#segDrawHint"); if(hint) hint.classList.remove("show");
+  setSeg2UI(false);
+  redrawSeg();
+}
+function finishPolygon(){
+  if(segPts.length<3){cancelDrawing();return;}
+  const a=cur(); if(!a) return;
+  const label=($("#segLabelInput")||{value:""}).value.trim()||"lesion";
+  a.polygons.push({id:"poly_"+Date.now(), label, points:[...segPts]});
+  a.ts=Date.now();
+  segPts=[]; mousePt=null;
+  cancelDrawing();
+  persist(); renderStrip(); updateProgress(); renderPolyCards();
+}
+function setSeg2UI(drawing){
+  const t=$("#segToggle"),f=$("#segFinish"),c=$("#segCancel");
+  if(!t)return;
+  t.style.display=drawing?"none":""; f.style.display=drawing?"":"none"; c.style.display=drawing?"":"none";
+}
+$("#segToggle").addEventListener("click",startDrawing);
+$("#segFinish").addEventListener("click",finishPolygon);
+$("#segCancel").addEventListener("click",cancelDrawing);
+
+/* ── Polygon manager (segment panel) ── */
+function deletePolyById(id){
+  const a=cur(); if(!a) return;
+  a.polygons=a.polygons.filter(p=>p.id!==id);
+  if(segSelId===id) segSelId=null;
+  a.ts=Date.now(); persist(); redrawSeg(); renderPolyCards(); renderStrip(); updateProgress();
+}
+
+function renderPolyCards(){
+  const host=$("#polyCards"); const empty=$("#polyEmpty"); const fl=$("#segFrameLbl");
+  if(!host) return;
+  const a=cur(); const polys=(a&&a.polygons)||[];
+  if(fl) fl.textContent=frames.length?`frame ${idx+1}/${frames.length}`:"";
+  if(empty) empty.classList.toggle("hidden",polys.length>0);
+  host.innerHTML="";
+  polys.forEach(poly=>{
+    const isSel=poly.id===segSelId;
+    const col=colorFor(poly.label||"lesion");
+    const card=document.createElement("div");
+    card.className="poly-card"+(isSel?" selected":"");
+    card.innerHTML=`
+      <div class="poly-card-top">
+        <span class="poly-swatch" style="background:${col}"></span>
+        <span class="poly-card-name">${esc(poly.label||"lesion")}</span>
+        <span class="poly-card-pts">${poly.points.length} pts</span>
+        <span class="poly-card-del" title="Delete">×</span>
+      </div>
+      ${isSel?`<div class="poly-edit">
+        <label>Label</label>
+        <input class="poly-rename" value="${esc(poly.label||"lesion")}" placeholder="Label"/>
+        <div class="poly-edit-hint">💡 Drag the dots on the image to reposition vertices.</div>
+        <button class="poly-del-btn">🗑 Delete this polygon</button>
+      </div>`:""}
+    `;
+    card.querySelector(".poly-card-top").addEventListener("click",e=>{
+      if(e.target.classList.contains("poly-card-del")){ deletePolyById(poly.id); return; }
+      segSelId=(isSel?null:poly.id); renderPolyCards(); redrawSeg();
+    });
+    if(isSel){
+      const inp=card.querySelector(".poly-rename");
+      inp.addEventListener("input",e=>{
+        const a2=cur(); if(!a2) return;
+        const p2=a2.polygons.find(p=>p.id===poly.id); if(!p2) return;
+        p2.label=e.target.value; a2.ts=Date.now(); persist();
+        card.querySelector(".poly-card-name").textContent=e.target.value||"lesion";
+        redrawSeg();
+      });
+      inp.addEventListener("click",e=>e.stopPropagation());
+      card.querySelector(".poly-del-btn").addEventListener("click",e=>{
+        e.stopPropagation(); deletePolyById(poly.id);
+      });
+    }
+    host.appendChild(card);
+  });
+}
+
+/* ── Mini list in annotate panel ── */
+function updatePolyMiniList(a){
+  const host=$("#polyList"); const hint=$("#segSumHint");
+  if(!host) return;
+  const polys=(a&&a.polygons)||[];
+  if(hint) hint.textContent=polys.length?polys.length+" region"+(polys.length>1?"s":""):"—";
+  host.innerHTML="";
+  polys.forEach(poly=>{
+    const col=colorFor(poly.label||"lesion");
+    const el=document.createElement("div"); el.className="poly-item";
+    el.innerHTML=`<span class="poly-dot" style="background:${col}"></span><span class="poly-lbl">${esc(poly.label||"lesion")}</span>`;
+    host.appendChild(el);
+  });
+}
+function updatePolyList(a){ updatePolyMiniList(a); }
+
+/* ============================================================
+   KEYBOARD
+   ============================================================ */
+document.addEventListener("keydown",e=>{
+  const t=e.target.tagName;
+  if(t==="TEXTAREA"||t==="INPUT")return;
+  if(e.key==="ArrowRight"||e.key==="j"){nav(1);e.preventDefault();}
+  else if(e.key==="ArrowLeft"||e.key==="k"){nav(-1);e.preventDefault();}
+  else if(["0","1","2","3"].includes(e.key)){ const a=cur(); if(a&&a.disease==="UC"){ const v=+e.key;
+      a.mayo=(a.mayo===v?null:v); a.ts=Date.now(); bindPanel();renderStrip();updateProgress();persist(); } }
+  else if(e.key==="="||e.key==="+"){setZoom(zoom*1.25);}
+  else if(e.key==="-"){setZoom(zoom/1.25);}
+  else if(e.key==="0"&&e.shiftKey){zoom=1;panX=0;panY=0;applyTransform();}
+});
+$("#helpBtn").addEventListener("click",()=>toast(
+  "← → move · 0–3 Mayo · scroll zoom · drag pan · = / − zoom",4000));
+
+/* ============================================================
+   UTIL + BOOT
+   ============================================================ */
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+let toastTimer=null;
+function toast(msg,ms=2200){ const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove("show"),ms); }
+
+(async function boot(){
+  await loadStore();
+  $("#savedState").textContent = hasStore? "no folder loaded" : "export to keep labels";
+  if(!window.showDirectoryPicker){ $("#saveDir").title="Folder write needs a Chromium browser"; }
+})();
+</script>
+</body>
+</html>
