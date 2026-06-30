@@ -91,6 +91,8 @@
   .dot.s0{background:var(--s0)}.dot.s1{background:var(--s1)}
   .dot.s2{background:var(--s2)}.dot.s3{background:var(--s3)}
   .dot.done{background:var(--accent)}
+  .dot.non-inf{background:#7a5c3a}
+  .frame-sub.non-inf{color:#b07d50}
 
   /* ---------- center: viewer ---------- */
   .viewer{position:relative;background:
@@ -319,6 +321,7 @@
       <div class="strip-head">
         <span class="ttl">Frames</span>
         <button class="filterbtn" id="filterBtn">unlabeled</button>
+        <button class="filterbtn" id="filterInfBtn">informative</button>
       </div>
       <div class="strip-list" id="stripList"></div>
     </aside>
@@ -620,6 +623,7 @@ let segDrawing = false; // segmentation draw mode active
 let activeTab  = "annotate"; // "annotate" | "segment"
 let dirHandle = null;   // FileSystemDirectoryHandle when available
 let filterUnlabeled = false;
+let filterInformative = false;
 let zoom = 1, panX = 0, panY = 0;
 
 /* ---- storage helpers (graceful if unavailable) ---- */
@@ -665,6 +669,8 @@ function isLabeled(n){
 }
 function frameDot(n){
   const a=ann[n];
+  if(a && a.quality==="Non-informative") return "non-inf";
+  if(a && a.quality==="Informative") return a.mayo!==null?"s"+a.mayo:"";
   if(a && a.disease==="UC" && a.mayo!==null) return "s"+a.mayo;
   if(isLabeled(n)) return "done";
   return "";
@@ -730,21 +736,30 @@ function renderStrip(){
   const list=$("#stripList"); list.innerHTML="";
   frames.forEach((f,i)=>{
     if(filterUnlabeled && isLabeled(f.name)) return;
+    if(filterInformative && !(ann[f.name]&&ann[f.name].quality==="Informative")) return;
     const el=document.createElement("div");
     el.className="frame"+(i===idx?" active":"");
+    const sl=subLabel(f.name);
+    const slText=typeof sl==="object"?sl.text:sl;
+    const slNonInf=typeof sl==="object"&&sl.nonInf;
     el.innerHTML=`<span class="dot ${frameDot(f.name)}"></span>
       <img class="thumb" src="${f.url}" loading="lazy" alt="">
       <div class="frame-meta"><div class="frame-name">${esc(f.name)}</div>
-      <div class="frame-sub">${subLabel(f.name)}</div></div>`;
+      <div class="frame-sub${slNonInf?" non-inf":""}">${slText}</div></div>`;
     el.addEventListener("click",()=>{idx=i;show();renderStrip();});
     list.appendChild(el);
   });
 }
 function subLabel(n){
   const a=ann[n]; if(!a) return "unlabeled";
+  const inf=a.quality==="Informative"?"Inf · ":a.quality==="Non-informative"?"Non-inf · ":"";
+  const isNonInf=a.quality==="Non-informative";
   if(a.disease==="UC"){ const p=[]; if(a.mayo!==null)p.push("Mayo "+a.mayo);
-    return p.length?p.join(" · "):"unlabeled"; }
-  const s=sesTotal(a); return s!==null? "SES-CD "+s : "unlabeled";
+    const score=p.length?p.join(" · "):"";
+    return {text:inf+(score||(!inf?"unlabeled":"")), nonInf:isNonInf}; }
+  const s=sesTotal(a);
+  const score=s!==null?"SES-CD "+s:"";
+  return {text:inf+(score||(!inf?"unlabeled":"")), nonInf:isNonInf};
 }
 
 /* ============================================================
@@ -923,6 +938,8 @@ function updateProgress(){
 }
 $("#filterBtn").addEventListener("click",e=>{ filterUnlabeled=!filterUnlabeled;
   e.target.classList.toggle("on",filterUnlabeled); renderStrip(); });
+$("#filterInfBtn").addEventListener("click",e=>{ filterInformative=!filterInformative;
+  e.target.classList.toggle("on",filterInformative); renderStrip(); });
 let flashTimer=null;
 function flashSaved(){ const el=$("#savedState"); el.textContent="saved"; el.classList.add("flash");
   clearTimeout(flashTimer); flashTimer=setTimeout(()=>{el.classList.remove("flash");
