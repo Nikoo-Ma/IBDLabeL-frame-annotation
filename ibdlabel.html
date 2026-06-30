@@ -287,7 +287,7 @@
   <div class="topbar">
     <div class="brand">
       <span class="mark">IBD<b>Label</b></span>
-      <span class="ver">v1 · local</span>
+      <span class="ver">v1.1 · local</span>
     </div>
     <div class="modetabs">
       <button class="modetab on" id="tabAnnotate">Annotate</button>
@@ -520,16 +520,23 @@
           <div class="chips" id="regionChips"></div>
         </div>
         <div class="sect">
-          <div class="lab">Image readability</div>
+          <div class="lab">Frame informativeness</div>
           <div class="chips" id="qualityChips"></div>
+        </div>
+        <div class="sect hidden" id="limitSect">
+          <div class="lab">Reason <span class="hint">(check all that apply)</span></div>
+          <div id="limitList"></div>
+          <input type="text" id="limitOtherInput" class="hidden" placeholder="Describe other reason…"
+            style="margin-top:8px;width:100%;background:var(--panel-2);border:1px solid var(--line);
+            border-radius:6px;padding:6px 9px;color:var(--ink);font-size:13px;font-family:var(--ui);outline:none"/>
         </div>
         <div class="sect">
           <div class="lab">Light mode</div>
           <div class="chips" id="lightChips"></div>
         </div>
-        <div class="sect hidden" id="limitSect">
-          <div class="lab">Limitations <span class="hint">(check all that apply)</span></div>
-          <div id="limitList"></div>
+        <div class="sect">
+          <div class="lab">Tool visible <span class="hint">(check all that apply)</span></div>
+          <div id="toolList"></div>
         </div>
         <div class="sect">
           <div class="lab">Reader confidence</div>
@@ -595,10 +602,10 @@ const STORAGE_KEY = "ibdlabel:annotations:v2";
 const IMG_RE = /\.(jpe?g|png|bmp|webp|gif|tiff?)$/i;
 
 const REGIONS = ["Rectum","Sigmoid","Descending","Transverse","Ascending","Caecum","Terminal ileum","Anastomosis","Pouch","Other"];
-const QUALITY = ["Readable","Readable, not optimal","Not readable"];
-const LIMITATIONS = ["Inadequate bowel cleanliness","Inadequate video quality","Inadequate washing",
-  "Inadequate withdrawal time","Underdistension","Incomplete examination","Light mode other than WLE","Other"];
+const QUALITY = ["Informative","Non-informative"];
+const LIMITATIONS = ["Motion blur","Excessive liquid or debris","Too close to colon wall","Overexposed","Other"];
 const LIGHT   = ["WLE","BLI","LCI","NBI","TXI"];
+const TOOLS   = ["Snare","Forceps","Dilator","Scope","Transparent cap","Other"];
 const CONF    = ["Low","Medium","High"];
 const UC_FEATURES = ["Erythema","Vascular pattern lost","Friability (contact bleed)","Spontaneous bleeding",
   "Granularity","Mucopus / exudate","Erosions","Shallow ulcers","Deep ulcers","Pseudopolyps"];
@@ -637,7 +644,7 @@ function blank(){
   return {disease:"UC", mayo:null,
     uc:{erythema:null,vascular:null,friability:null,spontBleed:null,ulcerExtent:null,mucopus:null,mucoOedema:null,mucoSurf:null},
     ses:{ulcerSize:null,ulcSurface:null,ulcerType:null,affSurface:null,narrowing:null},
-    ucFeat:{}, cdFeat:{}, region:null, quality:null, limitations:{}, light:null, conf:null, notes:"", tags:[], ts:null};
+    ucFeat:{}, cdFeat:{}, region:null, quality:null, limitations:{}, limitationsOther:"", light:null, tools:{}, conf:null, notes:"", tags:[], ts:null};
 }
 function cur(){
   if(idx<0) return null;
@@ -647,6 +654,7 @@ function cur(){
   if(!a.uc) a.uc={erythema:null,vascular:null,friability:null,spontBleed:null,ulcerExtent:null,mucopus:null,mucoOedema:null,mucoSurf:null};
   if(a.ses && a.ses.ulcerType===undefined) a.ses.ulcerType=null;
   if(!a.limitations) a.limitations={};
+  if(!a.tools) a.tools={};
   if(!a.polygons) a.polygons=[];
   return a;
 }
@@ -813,6 +821,10 @@ buildChips($("#confChips"),CONF,"conf");
 buildFeats($("#ucFeats"),UC_FEATURES,"ucFeat");
 buildFeats($("#cdFeats"),CD_FEATURES,"cdFeat");
 buildFeats($("#limitList"),LIMITATIONS,"limitations");
+buildFeats($("#toolList"),TOOLS,"tools");
+$("#limitOtherInput").addEventListener("input",e=>{
+  const a=cur(); if(!a)return; a.limitationsOther=e.target.value; a.ts=Date.now(); persist();
+});
 
 /* disease toggle */
 $("#diseaseSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
@@ -873,12 +885,20 @@ function bindPanel(){
   $$("#cdFeats .feat").forEach(el=>el.classList.toggle("on",!!a.cdFeat[el.querySelector(".name").textContent]));
   // chips
   syncChips("#regionChips",a.region); syncChips("#qualityChips",a.quality); syncChips("#lightChips",a.light); syncChips("#confChips",a.conf);
-  // limitations checklist — show only when not fully readable
-  const showLimits = a.quality && a.quality !== "Readable";
+  // limitations checklist — show only when Non-informative
+  const showLimits = a.quality === "Non-informative";
   $("#limitSect").classList.toggle("hidden", !showLimits);
   $$("#limitList .feat").forEach(el=>{
     const nm=el.querySelector(".name").textContent;
     el.classList.toggle("on",!!a.limitations[nm]);
+  });
+  const otherChecked = !!a.limitations["Other"];
+  const otherInput = $("#limitOtherInput");
+  otherInput.classList.toggle("hidden", !otherChecked);
+  if(otherChecked) otherInput.value = a.limitationsOther||"";
+  $$("#toolList .feat").forEach(el=>{
+    const nm=el.querySelector(".name").textContent;
+    el.classList.toggle("on",!!a.tools[nm]);
   });
   // notes/tags
   $("#notes").value=a.notes||"";
@@ -912,7 +932,7 @@ function flashSaved(){ const el=$("#savedState"); el.textContent="saved"; el.cla
    EXPORT / IMPORT / SAVE-TO-FOLDER
    ============================================================ */
 function buildExport(){
-  return {tool:"IBDLabel", version:1, exportedAt:new Date().toISOString(),
+  return {tool:"IBDLabel", version:1.1, exportedAt:new Date().toISOString(),
     frameCount:frames.length, annotations:ann};
 }
 function flatRow(name,a){
@@ -925,6 +945,8 @@ function flatRow(name,a){
     ses_ulcerType:a.ses.ulcerType, ses_affSurface:a.ses.affSurface, ses_narrowing:a.ses.narrowing,
     region:a.region, quality:a.quality, light_mode:a.light,
     limitations:Object.keys(a.limitations||{}).join("; "),
+    limitations_other:a.limitationsOther||"",
+    tools:Object.keys(a.tools||{}).join("; "),
     confidence:a.conf,
     features:[...Object.keys(a.ucFeat),...Object.keys(a.cdFeat)].join("; "),
     tags:a.tags.join("; "), notes:(a.notes||"").replace(/\s+/g," ").trim(),
