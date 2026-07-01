@@ -533,6 +533,14 @@
             style="margin-top:8px;width:100%;background:var(--panel-2);border:1px solid var(--line);
             border-radius:6px;padding:6px 9px;color:var(--ink);font-size:13px;font-family:var(--ui);outline:none"/>
         </div>
+        <div class="sect hidden" id="bubblesSect">
+          <div class="lab">Bubbles present</div>
+          <div class="chips" id="bubblesChips"></div>
+        </div>
+        <div class="sect">
+          <div class="lab">Manufacturer</div>
+          <div class="chips" id="mfrChips"></div>
+        </div>
         <div class="sect">
           <div class="lab">Light mode</div>
           <div class="chips" id="lightChips"></div>
@@ -606,9 +614,10 @@ const IMG_RE = /\.(jpe?g|png|bmp|webp|gif|tiff?)$/i;
 
 const REGIONS = ["Rectum","Sigmoid","Descending","Transverse","Ascending","Caecum","Terminal ileum","Anastomosis","Pouch","Other"];
 const QUALITY = ["Informative","Non-informative"];
-const LIMITATIONS = ["Motion blur","Excessive liquid or debris","Too close to colon wall","Overexposed","Other"];
+const LIMITATIONS = ["Motion blur","Excessive liquid or debris","Too close to colon wall","Overexposed","Bubbles","Other"];
 const LIGHT   = ["WLE","BLI","LCI","NBI","TXI"];
-const TOOLS   = ["Snare","Forceps","Dilator","Scope","Transparent cap","Other"];
+const MFR     = ["Fuji","Olympus"];
+const TOOLS   = ["Snare","Forceps","Dilator","Scope","Transparent cap","Endocuff","Other"];
 const CONF    = ["Low","Medium","High"];
 const UC_FEATURES = ["Erythema","Vascular pattern lost","Friability (contact bleed)","Spontaneous bleeding",
   "Granularity","Mucopus / exudate","Erosions","Shallow ulcers","Deep ulcers","Pseudopolyps"];
@@ -648,7 +657,7 @@ function blank(){
   return {disease:"UC", mayo:null,
     uc:{erythema:null,vascular:null,friability:null,spontBleed:null,ulcerExtent:null,mucopus:null,mucoOedema:null,mucoSurf:null},
     ses:{ulcerSize:null,ulcSurface:null,ulcerType:null,affSurface:null,narrowing:null},
-    ucFeat:{}, cdFeat:{}, region:null, quality:null, limitations:{}, limitationsOther:"", light:null, tools:{}, conf:null, notes:"", tags:[], ts:null};
+    ucFeat:{}, cdFeat:{}, region:null, quality:null, limitations:{}, limitationsOther:"", bubbles:null, light:null, mfr:null, tools:{}, conf:null, notes:"", tags:[], ts:null};
 }
 function cur(){
   if(idx<0) return null;
@@ -659,6 +668,7 @@ function cur(){
   if(a.ses && a.ses.ulcerType===undefined) a.ses.ulcerType=null;
   if(!a.limitations) a.limitations={};
   if(!a.tools) a.tools={};
+  if(a.bubbles===undefined) a.bubbles=null;
   if(!a.polygons) a.polygons=[];
   return a;
 }
@@ -832,11 +842,13 @@ function buildFeats(host, vals, key){
 buildChips($("#regionChips"),REGIONS,"region");
 buildChips($("#qualityChips"),QUALITY,"quality");
 buildChips($("#lightChips"),LIGHT,"light");
+buildChips($("#mfrChips"),MFR,"mfr");
 buildChips($("#confChips"),CONF,"conf");
 buildFeats($("#ucFeats"),UC_FEATURES,"ucFeat");
 buildFeats($("#cdFeats"),CD_FEATURES,"cdFeat");
 buildFeats($("#limitList"),LIMITATIONS,"limitations");
 buildFeats($("#toolList"),TOOLS,"tools");
+buildChips($("#bubblesChips"),["Yes","No"],"bubbles");
 $("#limitOtherInput").addEventListener("input",e=>{
   const a=cur(); if(!a)return; a.limitationsOther=e.target.value; a.ts=Date.now(); persist();
 });
@@ -899,7 +911,7 @@ function bindPanel(){
   $$("#ucFeats .feat").forEach(el=>el.classList.toggle("on",!!a.ucFeat[el.querySelector(".name").textContent]));
   $$("#cdFeats .feat").forEach(el=>el.classList.toggle("on",!!a.cdFeat[el.querySelector(".name").textContent]));
   // chips
-  syncChips("#regionChips",a.region); syncChips("#qualityChips",a.quality); syncChips("#lightChips",a.light); syncChips("#confChips",a.conf);
+  syncChips("#regionChips",a.region); syncChips("#qualityChips",a.quality); syncChips("#lightChips",a.light); syncChips("#mfrChips",a.mfr); syncChips("#confChips",a.conf);
   // limitations checklist — show only when Non-informative
   const showLimits = a.quality === "Non-informative";
   $("#limitSect").classList.toggle("hidden", !showLimits);
@@ -911,6 +923,9 @@ function bindPanel(){
   const otherInput = $("#limitOtherInput");
   otherInput.classList.toggle("hidden", !otherChecked);
   if(otherChecked) otherInput.value = a.limitationsOther||"";
+  // bubbles — show only for Informative
+  $("#bubblesSect").classList.toggle("hidden", a.quality!=="Informative");
+  syncChips("#bubblesChips", a.bubbles);
   $$("#toolList .feat").forEach(el=>{
     const nm=el.querySelector(".name").textContent;
     el.classList.toggle("on",!!a.tools[nm]);
@@ -960,9 +975,10 @@ function flatRow(name,a){
     uc_mucopus:a.uc.mucopus, uc_muco_oedema:a.uc.mucoOedema, uc_muco_surf:a.uc.mucoSurf,
     sescd_total:sesTotal(a), ses_ulcerSize:a.ses.ulcerSize, ses_ulcSurface:a.ses.ulcSurface,
     ses_ulcerType:a.ses.ulcerType, ses_affSurface:a.ses.affSurface, ses_narrowing:a.ses.narrowing,
-    region:a.region, quality:a.quality, light_mode:a.light,
+    region:a.region, quality:a.quality, light_mode:a.light, manufacturer:a.mfr||"",
     limitations:Object.keys(a.limitations||{}).join("; "),
     limitations_other:a.limitationsOther||"",
+    bubbles:a.bubbles||"",
     tools:Object.keys(a.tools||{}).join("; "),
     confidence:a.conf,
     features:[...Object.keys(a.ucFeat),...Object.keys(a.cdFeat)].join("; "),
